@@ -175,6 +175,7 @@ func (c LegacyRESTStorageProvider) NewLegacyRESTStorage(restOptionsGetter generi
 		nodeStorage.KubeletConnectionInfo,
 		c.ProxyTransport,
 		podDisruptionClient,
+		configMapStorage,
 	)
 	if err != nil {
 		return LegacyRESTStorage{}, genericapiserver.APIGroupInfo{}, err

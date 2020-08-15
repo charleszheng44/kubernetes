@@ -30,6 +30,7 @@ import (
 	"k8s.io/kubernetes/pkg/apis/core/validation"
 	"k8s.io/kubernetes/pkg/features"
 	"k8s.io/kubernetes/pkg/kubelet/client"
+	cmstore "k8s.io/kubernetes/pkg/registry/core/configmap/storage"
 	"k8s.io/kubernetes/pkg/registry/core/pod"
 
 	// ensure types are installed
@@ -40,6 +41,7 @@ import (
 type LogREST struct {
 	KubeletConn client.ConnectionInfoGetter
 	Store       *genericregistry.Store
+	ConfigMap   *cmstore.REST
 }
 
 // LogREST implements GetterWithOptions
@@ -92,6 +94,7 @@ func (r *LogREST) Get(ctx context.Context, name string, opts runtime.Object) (ru
 		Flush:           logOpts.Follow,
 		ResponseChecker: genericrest.NewGenericHttpResponseChecker(api.Resource("pods/log"), name),
 		RedirectChecker: genericrest.PreventRedirects,
+		ConfigMap:       r.ConfigMap,
 	}, nil
 }
 

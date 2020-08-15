@@ -42,6 +42,7 @@ import (
 	"k8s.io/kubernetes/pkg/printers"
 	printersinternal "k8s.io/kubernetes/pkg/printers/internalversion"
 	printerstorage "k8s.io/kubernetes/pkg/printers/storage"
+	cmstore "k8s.io/kubernetes/pkg/registry/core/configmap/storage"
 	registrypod "k8s.io/kubernetes/pkg/registry/core/pod"
 	podrest "k8s.io/kubernetes/pkg/registry/core/pod/rest"
 )
@@ -68,7 +69,7 @@ type REST struct {
 }
 
 // NewStorage returns a RESTStorage object that will work against pods.
-func NewStorage(optsGetter generic.RESTOptionsGetter, k client.ConnectionInfoGetter, proxyTransport http.RoundTripper, podDisruptionBudgetClient policyclient.PodDisruptionBudgetsGetter) (PodStorage, error) {
+func NewStorage(optsGetter generic.RESTOptionsGetter, k client.ConnectionInfoGetter, proxyTransport http.RoundTripper, podDisruptionBudgetClient policyclient.PodDisruptionBudgetsGetter, configMapREST *cmstore.REST) (PodStorage, error) {
 
 	store := &genericregistry.Store{
 		NewFunc:                  func() runtime.Object { return &api.Pod{} },
@@ -106,9 +107,9 @@ func NewStorage(optsGetter generic.RESTOptionsGetter, k client.ConnectionInfoGet
 		Eviction:            newEvictionStorage(store, podDisruptionBudgetClient),
 		Status:              &StatusREST{store: &statusStore},
 		EphemeralContainers: &EphemeralContainersREST{store: &ephemeralContainersStore},
-		Log:                 &podrest.LogREST{Store: store, KubeletConn: k},
+		Log:                 &podrest.LogREST{Store: store, KubeletConn: k, ConfigMap: configMapREST},
 		Proxy:               &podrest.ProxyREST{Store: store, ProxyTransport: proxyTransport},
-		Exec:                &podrest.ExecREST{Store: store, KubeletConn: k},
+		Exec:                &podrest.ExecREST{Store: store, KubeletConn: k, ConfigMap: configMapREST},
 		Attach:              &podrest.AttachREST{Store: store, KubeletConn: k},
 		PortForward:         &podrest.PortForwardREST{Store: store, KubeletConn: k},
 	}, nil

@@ -22,17 +22,28 @@ import (
 	"net/http"
 	"net/url"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/net"
 	"k8s.io/apimachinery/pkg/util/proxy"
+	kubereq "k8s.io/apiserver/pkg/endpoints/request"
 	genericfeatures "k8s.io/apiserver/pkg/features"
 	genericregistry "k8s.io/apiserver/pkg/registry/generic/registry"
 	"k8s.io/apiserver/pkg/registry/rest"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	"k8s.io/klog/v2"
 	api "k8s.io/kubernetes/pkg/apis/core"
 	"k8s.io/kubernetes/pkg/capabilities"
 	"k8s.io/kubernetes/pkg/kubelet/client"
+	cmstore "k8s.io/kubernetes/pkg/registry/core/configmap/storage"
 	"k8s.io/kubernetes/pkg/registry/core/pod"
+)
+
+const (
+	VirtualClusterNameHeaderKey        = "virtualcluster-name"
+	VirtualClusterNameConfigMapDataKey = "VirtualClusterName"
+	VirtualClusterInfoConfigMapNS      = "kube-system"
+	VirtualClusterInfoConfigMapName    = "virtualcluster-info"
 )
 
 // ProxyREST implements the proxy subresource for a Pod
@@ -120,10 +131,42 @@ func (r *AttachREST) ConnectMethods() []string {
 type ExecREST struct {
 	Store       *genericregistry.Store
 	KubeletConn client.ConnectionInfoGetter
+	ConfigMap   *cmstore.REST
 }
 
 // Implement Connecter
 var _ = rest.Connecter(&ExecREST{})
+
+func getVirtualClusterName(cmStore *cmstore.REST) string {
+	klog.Info("+++++++++++ try to get virtualcluster name")
+	ctx := kubereq.WithNamespace(kubereq.NewContext(), VirtualClusterInfoConfigMapNS)
+	obj, err := cmStore.Get(ctx, VirtualClusterInfoConfigMapName, &metav1.GetOptions{})
+	if err != nil {
+		klog.Errorf("fail to get configmap/%s: %v", VirtualClusterInfoConfigMapName, err)
+		return ""
+	}
+	klog.Infof("+++++++++++ %v", obj)
+	cm, ok := obj.(*api.ConfigMap)
+	if !ok {
+		klog.Error("fail to assert runtime object to api.ConfigMap")
+		return ""
+	}
+	vcName, exist := cm.Data[VirtualClusterNameConfigMapDataKey]
+	if !exist {
+		klog.Errorf("can't find value associate to %s in configmap.Data", VirtualClusterNameConfigMapDataKey)
+		return ""
+	}
+	klog.Info("found virtualcluster name, the virtualcluster name is %s", vcName)
+	return vcName
+}
+
+func addHeaderWrapper(headerKey string, headerValue string, apiHandler http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		klog.Info("add header %s:%s", headerKey, headerValue)
+		r.Header.Add(headerKey, headerValue)
+		apiHandler.ServeHTTP(w, r)
+	})
+}
 
 // New creates a new podExecOptions object.
 func (r *ExecREST) New() runtime.Object {
@@ -140,7 +183,9 @@ func (r *ExecREST) Connect(ctx context.Context, name string, opts runtime.Object
 	if err != nil {
 		return nil, err
 	}
-	return newThrottledUpgradeAwareProxyHandler(location, transport, false, true, true, responder), nil
+	vcName := getVirtualClusterName(r.ConfigMap)
+	return addHeaderWrapper(VirtualClusterNameHeaderKey, vcName,
+		newThrottledUpgradeAwareProxyHandler(location, transport, false, true, true, responder)), nil
 }
 
 // NewConnectOptions returns the versioned object that represents exec parameters

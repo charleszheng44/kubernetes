@@ -25,9 +25,21 @@ import (
 	"net/url"
 	"strings"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	kubereq "k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
+	"k8s.io/klog/v2"
+	api "k8s.io/kubernetes/pkg/apis/core"
+	cmstore "k8s.io/kubernetes/pkg/registry/core/configmap/storage"
+)
+
+const (
+	VirtualClusterNameHeaderKey        = "virtualcluster-name"
+	VirtualClusterNameConfigMapDataKey = "VirtualClusterName"
+	VirtualClusterInfoConfigMapNS      = "kube-system"
+	VirtualClusterInfoConfigMapName    = "virtualcluster-info"
 )
 
 // LocationStreamer is a resource that streams the contents of a particular
@@ -39,6 +51,7 @@ type LocationStreamer struct {
 	Flush           bool
 	ResponseChecker HttpResponseChecker
 	RedirectChecker func(req *http.Request, via []*http.Request) error
+	ConfigMap       *cmstore.REST
 }
 
 // a LocationStreamer must implement a rest.ResourceStreamer
@@ -49,6 +62,29 @@ func (obj *LocationStreamer) GetObjectKind() schema.ObjectKind {
 }
 func (obj *LocationStreamer) DeepCopyObject() runtime.Object {
 	panic("rest.LocationStreamer does not implement DeepCopyObject")
+}
+
+func (s *LocationStreamer) getVirtualClusterName() string {
+	klog.Info("+++++++++++ get virtualcluster name")
+	ctx := kubereq.WithNamespace(kubereq.NewContext(), VirtualClusterInfoConfigMapNS)
+	obj, err := s.ConfigMap.Get(ctx, VirtualClusterInfoConfigMapName, &metav1.GetOptions{})
+	if err != nil {
+		klog.Errorf("fail to get configmap/%s: %v", VirtualClusterInfoConfigMapName, err)
+		return ""
+	}
+	klog.Infof("+++++++++++ %v", obj)
+	cm, ok := obj.(*api.ConfigMap)
+	if !ok {
+		klog.Error("fail to assert runtime object to api.ConfigMap")
+		return ""
+	}
+	vcName, exist := cm.Data[VirtualClusterNameConfigMapDataKey]
+	if !exist {
+		klog.Errorf("can't find value associate to %s in configmap.Data", VirtualClusterNameConfigMapDataKey)
+		return ""
+	}
+	klog.Info("found virtualcluster name, the virtualcluster name is %s", vcName)
+	return vcName
 }
 
 // InputStream returns a stream with the contents of the URL location. If no location is provided,
@@ -67,6 +103,7 @@ func (s *LocationStreamer) InputStream(ctx context.Context, apiVersion, acceptHe
 		Transport:     transport,
 		CheckRedirect: s.RedirectChecker,
 	}
+
 	req, err := http.NewRequest("GET", s.Location.String(), nil)
 	if err != nil {
 		return nil, false, "", fmt.Errorf("failed to construct request for %s, got %v", s.Location.String(), err)
@@ -74,6 +111,9 @@ func (s *LocationStreamer) InputStream(ctx context.Context, apiVersion, acceptHe
 	// Pass the parent context down to the request to ensure that the resources
 	// will be release properly.
 	req = req.WithContext(ctx)
+
+	vcName := s.getVirtualClusterName()
+	req.Header.Add(VirtualClusterNameHeaderKey, vcName)
 
 	resp, err := client.Do(req)
 	if err != nil {
